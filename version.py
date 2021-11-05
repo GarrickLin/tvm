@@ -62,10 +62,13 @@ def git_describe_version():
     local_ver: str
         Local version (with additional label appended to pub_ver).
 
-    Note
-    ----
-    We follow PEP 440's convention of public version
-    and local versions.
+    Notes
+    -----
+    - We follow PEP 440's convention of public version
+      and local versions.
+    - Only tags conforming to vMAJOR.MINOR.REV (e.g. "v0.7.0")
+      are considered in order to generate the version string.
+      See the use of `--match` in the `git` command below.
 
     Here are some examples:
 
@@ -77,7 +80,7 @@ def git_describe_version():
       after the most recent tag(v0.7.0),
       the git short hash tag of the current commit is 0d07a329e.
     """
-    cmd = ["git", "describe", "--tags"]
+    cmd = ["git", "describe", "--tags", "--match", "v[0-9]*.[0-9]*.[0-9]*"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=PROJ_ROOT)
     (out, _) = proc.communicate()
 
@@ -123,19 +126,20 @@ def update(file_name, pattern, repl, dry_run=False):
     update = []
     hit_counter = 0
     need_update = False
-    for l in open(file_name):
-        result = re.findall(pattern, l)
-        if result:
-            assert len(result) == 1
-            hit_counter += 1
-            if result[0] != repl:
-                l = re.sub(pattern, repl, l)
-                need_update = True
-                print("%s: %s -> %s" % (file_name, result[0], repl))
-            else:
-                print("%s: version is already %s" % (file_name, repl))
+    with open(file_name) as file:
+        for l in file:
+            result = re.findall(pattern, l)
+            if result:
+                assert len(result) == 1
+                hit_counter += 1
+                if result[0] != repl:
+                    l = re.sub(pattern, repl, l)
+                    need_update = True
+                    print("%s: %s -> %s" % (file_name, result[0], repl))
+                else:
+                    print("%s: version is already %s" % (file_name, repl))
 
-        update.append(l)
+            update.append(l)
     if hit_counter != 1:
         raise RuntimeError("Cannot find version in %s" % file_name)
 

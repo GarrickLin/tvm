@@ -17,6 +17,7 @@
 # pylint: disable=invalid-name, unused-import, redefined-outer-name
 """Runtime NDArray API"""
 import ctypes
+import warnings
 import numpy as np
 import tvm._ffi
 
@@ -164,9 +165,18 @@ class NDArray(NDArrayBase):
                     source_array.shape, shape
                 )
             )
-        source_array = np.ascontiguousarray(
-            source_array, dtype="uint16" if dtype == "bfloat16" else dtype
+        numpy_str_map = DataType.NUMPY2STR
+        np_dtype_str = (
+            numpy_str_map[source_array.dtype]
+            if source_array.dtype in numpy_str_map
+            else str(source_array.dtype)
         )
+        if (not source_array.flags["C_CONTIGUOUS"]) or (
+            dtype == "bfloat16" or dtype != np_dtype_str
+        ):
+            source_array = np.ascontiguousarray(
+                source_array, dtype="uint16" if dtype == "bfloat16" else dtype
+            )
         assert source_array.flags["C_CONTIGUOUS"]
         data = source_array.ctypes.data_as(ctypes.c_void_p)
         nbytes = ctypes.c_size_t(source_array.size * source_array.dtype.itemsize)
@@ -175,13 +185,23 @@ class NDArray(NDArrayBase):
 
     def __repr__(self):
         res = "<tvm.nd.NDArray shape={0}, {1}>\n".format(self.shape, self.device)
-        res += self.asnumpy().__repr__()
+        res += self.numpy().__repr__()
         return res
 
     def __str__(self):
-        return str(self.asnumpy())
+        return str(self.numpy())
 
     def asnumpy(self):
+        """Convert this array to numpy array. This API will be deprecated in TVM v0.8 release.
+        Please use `numpy` instead."""
+        warnings.warn(
+            "NDArray.asnumpy() will be deprecated in TVM v0.8 release. "
+            "Please use NDArray.numpy() instead.",
+            DeprecationWarning,
+        )
+        return self.numpy()
+
+    def numpy(self):
         """Convert this array to numpy array
 
         Returns
@@ -254,17 +274,13 @@ def device(dev_type, dev_id=0):
     .. code-block:: python
 
       assert tvm.device("cpu", 1) == tvm.cpu(1)
-      assert tvm.device("gpu", 0) == tvm.gpu(0)
-      assert tvm.device("cuda", 0) == tvm.gpu(0)
+      assert tvm.device("cuda", 0) == tvm.cuda(0)
     """
     if isinstance(dev_type, string_types):
-        if "-device=micro_dev" in dev_type:
-            dev_type = Device.STR2MASK["micro_dev"]
-        else:
-            dev_type = dev_type.split()[0]
-            if dev_type not in Device.STR2MASK:
-                raise ValueError("Unknown device type %s" % dev_type)
-            dev_type = Device.STR2MASK[dev_type]
+        dev_type = dev_type.split()[0]
+        if dev_type not in Device.STR2MASK:
+            raise ValueError("Unknown device type %s" % dev_type)
+        dev_type = Device.STR2MASK[dev_type]
     return Device(dev_type, dev_id)
 
 
@@ -362,8 +378,8 @@ def cpu(dev_id=0):
     return Device(1, dev_id)
 
 
-def gpu(dev_id=0):
-    """Construct a GPU device
+def cuda(dev_id=0):
+    """Construct a CUDA GPU device
 
     Parameters
     ----------
@@ -375,6 +391,28 @@ def gpu(dev_id=0):
     dev : Device
         The created device
     """
+    return Device(2, dev_id)
+
+
+def gpu(dev_id=0):
+    """Construct a CUDA GPU device
+
+        deprecated:: 0.9.0
+        Use :py:func:`tvm.cuda` instead.
+
+    Parameters
+    ----------
+    dev_id : int, optional
+        The integer device id
+
+    Returns
+    -------
+    dev : Device
+        The created device
+    """
+    warnings.warn(
+        "Please use tvm.cuda() instead of tvm.gpu(). tvm.gpu() is going to be deprecated in 0.9.0",
+    )
     return Device(2, dev_id)
 
 
@@ -477,22 +515,6 @@ def ext_dev(dev_id=0):
     device by plugin device API as ext_dev.
     """
     return Device(12, dev_id)
-
-
-def micro_dev(dev_id=0):
-    """Construct a micro device
-
-    Parameters
-    ----------
-    dev_id : int, optional
-        The integer device id
-
-    Returns
-    -------
-    dev : Device
-        The created device
-    """
-    return Device(13, dev_id)
 
 
 def hexagon(dev_id=0):

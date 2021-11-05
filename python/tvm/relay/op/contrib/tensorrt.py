@@ -23,6 +23,7 @@ from tvm import relay
 from tvm.relay import transform
 from tvm.relay.build_module import bind_params_by_name
 from tvm.relay.expr import Call, Constant, Tuple, GlobalVar, Var, TupleGetItem
+from tvm.ir import Op
 from tvm.relay.expr_functor import ExprMutator, ExprVisitor
 
 logger = logging.getLogger("TensorRT")
@@ -141,6 +142,7 @@ def partition_for_tensorrt(
             transform.RemoveUnusedFunctions(),
             transform.ConvertLayout(
                 {
+                    "nn.conv1d": ["NCW", "default"],
                     "nn.conv2d": ["NCHW", "default"],
                     "nn.conv3d": ["NCDHW", "default"],
                     "nn.conv2d_transpose": ["NCHW", "default"],
@@ -369,6 +371,23 @@ def softmax_annotate_fn(expr):  # pylint: disable=unused-variable
         return False
     if get_tensorrt_use_implicit_batch_mode() and int(attrs.axis) == 0:
         logger.info("nn.softmax: can't modify batch dimension.")
+        return False
+    return True
+
+
+@_register_external_dynamic_check_func("nn.conv1d")
+def conv1d_annotate_fn(expr):  # pylint: disable=unused-variable
+    """Check if nn.conv1d is supported by TensorRT."""
+
+    attrs, args = expr.attrs, expr.args
+    if any([x.checked_type.dtype != "float32" for x in args]):
+        logger.info("Only float32 inputs are supported for TensorRT.")
+        return False
+    if attrs.data_layout != "NCW":
+        logger.info("nn.conv1d: data_layout is %s but must be NCW.", attrs.data_layout)
+        return False
+    if attrs.kernel_layout != "OIW":
+        logger.info("nn.conv1d: kernel_layout is %s but must be OIW.", attrs.kernel_layout)
         return False
     return True
 
@@ -726,11 +745,15 @@ def pad_annotate_fn(expr):  # pylint: disable=unused-variable
     if float(attrs.pad_value) != 0.0:
         logger.info("nn.pad: pad value is %f but must be 0.0.", float(attrs.pad_value))
         return False
+    if len(attrs.pad_width) not in [4, 5]:
+        logger.info("nn.pad: can only pad 4D or 5D inputs")
+        return False
     if any([x != 0 for x in attrs.pad_width[0]]) or any([x != 0 for x in attrs.pad_width[1]]):
         logger.info("nn.pad: can't pad batch or channel dimensions.")
         return False
     if len(attrs.pad_width) == 5 and any([x != 0 for x in attrs.pad_width[2]]):
         logger.info("nn.pad: can only pad last two dimensions for 5D inputs.")
+        return False
     return True
 
 
@@ -907,6 +930,7 @@ class IsComputeIntensiveGraph(ExprVisitor):
     def visit_call(self, call):
         compute_intensive_ops = set(
             [
+                "nn.conv1d",
                 "nn.conv2d",
                 "nn.conv2d_transpose",
                 "nn.conv3d",
@@ -1031,6 +1055,7 @@ class RemoveDropout(ExprMutator):
             return visit
         if (
             isinstance(visit.tuple_value, Call)
+            and isinstance(visit.tuple_value.op, Op)
             and visit.tuple_value.op.name == "nn.dropout"
             and visit.index == 0
         ):
